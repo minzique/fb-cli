@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# fb-cli launcher — runs the package from the repo without installing.
+set -e
+# resolve symlinks so the launcher works from ~/.local/bin/fb-cli too
+SCRIPT="$0"
+while [ -L "$SCRIPT" ]; do
+  TARGET="$(readlink "$SCRIPT")"
+  case "$TARGET" in
+    /*) SCRIPT="$TARGET" ;;
+    *)  SCRIPT="$(dirname "$SCRIPT")/$TARGET" ;;
+  esac
+done
+HERE="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+PYTHONPATH="$HERE${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m fb_cli "$@"
