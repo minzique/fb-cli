@@ -19,7 +19,8 @@ fields. This wraps that traffic in a clean CLI you can script against.
 | `listing` (full PDP + photos + seller + condition + coordinates) | ✅ |
 | `suggest` (autocomplete) | ✅ |
 | `watch` (saved searches with new-listing diff) | ✅ |
-| `sort` (price, recency, distance) | ⚠️ wire format not yet captured |
+| `browser` fallback (open/search/extract/scroll/screenshot via managed Chrome) | ✅ |
+| GraphQL `sort` (price, recency, distance) | ⚠️ wire format not yet captured; use `browser search` as fallback |
 | Messaging / write ops | ❌ not implemented (and probably won't be) |
 
 ## Install
@@ -139,6 +140,32 @@ fb-cli listing 741366038967680
 Returns full description, photos, condition, location, seller, delivery
 options, etc.
 
+### Browser-backed fallback
+
+Use this when the Facebook web UI can do something the captured GraphQL surface
+cannot yet model, or when agents need to inspect what the browser actually
+shows.
+
+```bash
+fb-cli browser search "235/60R18" --limit 20 --format jsonl
+fb-cli browser scroll --steps 2
+fb-cli browser extract --limit 40 --format jsonl
+fb-cli browser screenshot ~/.fb-cli/marketplace.png
+fb-cli browser open "https://www.facebook.com/marketplace/"
+```
+
+The browser commands reuse fb-cli's managed Chrome profile at
+`~/.fb-cli/chrome-profile/`. They are intended for read/inspect workflows:
+search pages, visible listing extraction, scrolling, screenshots, and gated
+JavaScript diagnostics (`browser eval ... --unsafe`). They do **not** send seller
+messages, create listings, buy items, or perform irreversible Marketplace
+actions.
+
+Prefer the normal GraphQL `search`/`listing` commands when they work because
+they return richer structured data (`creation_time`, seller IDs, coordinates,
+etc.). Fall back to `browser` when GraphQL doc IDs or filter encodings lag the
+live website.
+
 ### Watches (saved searches with new-listing diff)
 
 ```bash
@@ -187,6 +214,9 @@ known `doc_id` registry, and how to recapture rotated IDs.
 
 - **Cookie auth means you act as you.** Aggressive scraping = account flag.
   The CLI does no automatic rate limiting; be reasonable.
+- **Browser extraction is visible-page best effort.** `fb-cli browser extract`
+  reads cards rendered in the current web UI. It is less complete than GraphQL
+  details and can change when Facebook redesigns Marketplace.
 - **Auth/doc_id rotation.** FB rotates tokens every few days and doc_ids on
   deploys. First try `fb-cli auth import-browser`. If a query still returns
   empty or 500, re-export a HAR and run `python -m fb_cli.tools.diff_doc_ids
