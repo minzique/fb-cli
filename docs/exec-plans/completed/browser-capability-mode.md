@@ -11,15 +11,17 @@ The tool remains read-first and agent-safe. It should not send seller messages, 
 ## Progress
 
 - [x] (2026-05-04 08:04Z) Fetch current project/auth status and create this plan.
-- [ ] Add a reusable stdlib Chrome DevTools Protocol layer for page selection, navigation, evaluation, scrolling, and screenshots.
-- [ ] Add `fb-cli browser ...` commands for Marketplace UI search, current-page extraction, navigation, scrolling, screenshots, and safe JavaScript evaluation.
-- [ ] Document the new browser fallback in README, skill docs, changelog, and update version metadata.
-- [ ] Validate with local compile checks and a live Marketplace smoke test against the managed Chrome profile.
+- [x] (2026-05-04 08:41Z) Add a reusable stdlib Chrome DevTools Protocol layer for page selection, navigation, evaluation, scrolling, and screenshots.
+- [x] (2026-05-04 08:41Z) Add `fb-cli browser ...` commands for Marketplace UI search, current-page extraction, navigation, scrolling, screenshots, and safe JavaScript evaluation.
+- [x] (2026-05-04 08:41Z) Document the new browser fallback in README, skill docs, changelog, and update version metadata.
+- [x] (2026-05-04 08:41Z) Validate with local compile checks and a live Marketplace smoke test against the managed Chrome profile.
 
 ## Surprises & Discoveries
 
 - The repository has no `docs/PLANS.md`; this plan follows the local ExecPlan skill format directly.
 - Current local status before implementation: branch `main` was clean and aligned with `origin/main`; package version is `0.2.1`; `fb-cli auth doctor` says cookies are valid and tokens refresh successfully; managed Chrome exists but was not running.
+- Live browser smoke for `235/60R18` returned visible cards, but Facebook's actual results include near matches such as `235/55/18`, `235/50R21`, and `235/60r16`; agent triage still needs exact-spec filtering after retrieval.
+- Browser extraction can parse visible card title/price/city from ARIA labels and card text, but does not expose GraphQL-only fields such as `creation_time`, seller ID, or coordinates.
 
 ## Decision Log
 
@@ -29,7 +31,7 @@ The tool remains read-first and agent-safe. It should not send seller messages, 
 
 ## Outcomes & Retrospective
 
-(fill when complete)
+Delivered `fb-cli browser` as an explicit browser-backed fallback while preserving existing GraphQL commands. The fallback can open/search Marketplace, extract visible cards, scroll, take screenshots, and run gated diagnostics. Local and live smoke validation passed. Remaining limitation: browser card extraction is best-effort and less structured than GraphQL listing/detail calls.
 
 ## Context and Orientation
 
@@ -77,7 +79,7 @@ Milestone 4: Validation. Run Python compile checks and live commands against the
 
    Expected: `## feat/browser-capability-mode` with only planned changes.
 
-2. Implement reusable CDP/browser modules and CLI wiring.
+2. Implement reusable CDP/browser modules and CLI wiring. Done in `fb_cli/cdp.py`, `fb_cli/marketplace_browser.py`, and `fb_cli/cli.py`.
 
 3. Run static validation:
 
