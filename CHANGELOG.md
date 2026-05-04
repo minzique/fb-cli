@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0
+
+Browser-backed Marketplace fallback for agents.
+
+- Added `fb-cli browser` command group powered by the managed Chrome profile:
+  - `browser search <query>` opens Marketplace search in Chrome and extracts visible listing cards.
+  - `browser extract` reads the current visible Marketplace page.
+  - `browser scroll` loads more UI results.
+  - `browser screenshot [path]` writes a PNG for visual debugging.
+  - `browser open <url>` and gated `browser eval <expr> --unsafe` expose controlled diagnostics.
+- Extracted the stdlib Chrome DevTools websocket client into `fb_cli.cdp` so auth import and browser fallback share one CDP layer.
+- Documented when agents should use GraphQL first vs browser fallback when the web UI has capabilities the internal GraphQL wrapper has not captured yet.
+
 ## 0.2.1
 
 Packaging-only release for user-friendly installation.

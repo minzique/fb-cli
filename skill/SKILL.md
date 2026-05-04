@@ -30,6 +30,12 @@ fb-cli search "digital piano" --max 100000 --limit 20
 # Listing detail (full description, photos, condition, seller, coords)
 fb-cli listing 741366038967680
 
+# Browser fallback when GraphQL misses live UI capabilities / sort / layout
+fb-cli browser search "235/60R18" --limit 20 --format jsonl
+fb-cli browser scroll --steps 2
+fb-cli browser extract --limit 40 --format jsonl
+fb-cli browser screenshot ~/.fb-cli/marketplace.png
+
 # Saved watches with new-listing diff (for "tell me when something new shows up")
 fb-cli watch add piano --query "digital piano" --max 100000 --radius 100
 fb-cli watch list
@@ -46,9 +52,10 @@ fb-cli auth import-browser  # fuller: auto-launches managed Chrome if needed
 
 ## Output
 
-- **Search/watch** default to a pretty table. Add `--format jsonl` for
-  programmatic parsing.
+- **Search/watch/browser search/browser extract** default to a pretty table.
+  Add `--format jsonl` for programmatic parsing.
 - **Listing** defaults to JSON.
+- **Browser screenshot** writes a PNG and prints its path.
 
 JSONL records carry: `id`, `title`, `price`, `price_formatted` (e.g.
 "LKR28,500"), `city`, `creation_time` (epoch), `seller_name`, `delivery_types`,
@@ -77,11 +84,24 @@ For the user's piano hunt specifically: weighted 88-key digital pianos
 Kawai ES110) >> 61-key unweighted toy keyboards >> free acoustic uprights
 (usually a money pit). See user's earlier conversation if relevant.
 
+## GraphQL first, browser fallback second
+
+Use normal `fb-cli search` and `fb-cli listing` first. They return richer
+structured fields such as `creation_time`, seller IDs, and coordinates.
+
+Use `fb-cli browser ...` when agents are otherwise handicapped by the captured
+GraphQL surface — e.g. sort/filter encodings changed, the web UI shows results
+GraphQL missed, or you need a screenshot/visible-page inspection. Browser
+records are visible-card best effort and include `source: "browser"`.
+
 ## Auth & limits
 
 - Auth file: `~/.fb-cli/auth.json` (mode 600, contains real session cookies)
+- Managed Chrome profile: `~/.fb-cli/chrome-profile/`
 - This is the user's real Facebook account. **Don't message sellers**, don't
   attempt to create listings, don't do anything write-y. Read-only.
+- `fb-cli browser eval ... --unsafe` is diagnostics-only. Do not use it to click
+  buttons, type into seller chats, submit forms, buy items, or create listings.
 - Rate limit yourself: pause a few seconds between bulk PDP fetches, don't
   iterate over hundreds of listings in one session.
 
