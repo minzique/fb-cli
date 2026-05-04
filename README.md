@@ -31,28 +31,66 @@ ln -s ~/Developer/fb-cli/bin/fb-cli ~/.local/bin/fb-cli
 
 That's it. Requires Python ≥3.10.
 
-## Auth (one-time)
+## Auth (one-time, then automatic for ~1 year)
 
-Facebook has no API keys for Marketplace. You authenticate as yourself by
-exporting a HAR file from a logged-in browser session, then importing it.
+Facebook has no API keys for Marketplace. You authenticate as yourself once,
+then fb-cli keeps the session fresh on its own.
 
-1. Open Firefox or Chrome → log in to facebook.com → open Marketplace and
-   browse one search and one listing (so the HAR captures the right cookies
-   + doc_ids).
-2. Open DevTools → Network tab → right-click any request → **Save All as
-   HAR**.
-3. Import:
+### How FB auth actually works
+
+FB stores two layers of state. The reverse-engineered model:
+
+- **Long-lived signed cookies** (`xs`, `c_user`, `datr`, `fr`, `sb`).
+  Lifetime ~1 year when you check **Save login info** at login. This *is*
+  Facebook's "remember me" — they just set `xs` with `Max-Age=31536000`. The
+  signature is server-side so it can't be forged, but it can be carried
+  indefinitely.
+- **Page-bound CSRF tokens** (`fb_dtsg`, `lsd`, `jazoest`). Embedded in the
+  HTML of every facebook.com page, rotated every few hours, but trivially
+  re-derivable from any successful page load using the cookies above.
+
+fb-cli implements both: `auth import-browser` captures the long-lived
+cookies, and `auth refresh` (also called automatically inside `client.graphql`
+on token errors) fetches `/marketplace/` HTML and scrapes new CSRF tokens out
+of it. As long as `xs` is alive, you never need to touch a HAR or a browser.
+
+### One-time setup (recommended)
 
 ```bash
-fb-cli auth import-har ~/Downloads/www.facebook.com_*.har
-fb-cli auth status
+fb-cli auth chrome login        # opens FB login in fb-cli's managed Chrome
+# → sign in with "Save login info" CHECKED, navigate to /marketplace/
+fb-cli auth import-browser      # captures cookies + tokens
+fb-cli auth status              # confirm
 ```
 
-Auth lands in `~/.fb-cli/auth.json` (mode 600). It contains your `c_user`,
-`xs`, `fb_dtsg`, `lsd`, etc. Treat it like a password.
+The managed Chrome lives at `~/.fb-cli/chrome-profile/`, separate from your
+normal browsing.
 
-The `fb_dtsg` token rotates every few days. If requests start returning
-"Login required" or `noncoercible_variable_value`, re-export the HAR.
+### Day-to-day
+
+Nothing. Token-staleness errors are caught and refreshed transparently.
+
+### When something breaks
+
+```bash
+fb-cli auth doctor              # diagnose + recommended fix
+fb-cli auth refresh             # cheap: 1 HTTPS GET, fixes ~95% of issues
+fb-cli auth import-browser      # auto-launches managed Chrome if needed
+```
+
+Only when `xs` finally expires (~1 year) do you need to re-run
+`fb-cli auth chrome login` and sign in again.
+
+### Alternative: HAR import
+
+Still supported if you'd rather not run the managed Chrome:
+
+```bash
+# DevTools → Network → Save All as HAR while browsing facebook.com/marketplace/
+fb-cli auth import-har ~/Downloads/www.facebook.com_*.har
+```
+
+Auth lands in `~/.fb-cli/auth.json` (mode 600). Treat it like a password.
 
 ## Usage
 
@@ -125,10 +163,10 @@ known `doc_id` registry, and how to recapture rotated IDs.
 
 - **Cookie auth means you act as you.** Aggressive scraping = account flag.
   The CLI does no automatic rate limiting; be reasonable.
-- **`doc_id` rotation.** FB rotates these on most deploys. When something
-  starts returning empty or 500, re-export a HAR and run
-  `python -m fb_cli.tools.diff_doc_ids <new.har>` (TODO) to refresh
-  `fb_cli/queries.py`.
+- **Auth/doc_id rotation.** FB rotates tokens every few days and doc_ids on
+  deploys. First try `fb-cli auth import-browser`. If a query still returns
+  empty or 500, re-export a HAR and run `python -m fb_cli.tools.diff_doc_ids
+  <new.har>` (TODO) to refresh `fb_cli/queries.py`.
 - **Read-only.** No messaging, no listing creation, no purchase. By design.
 - **Single-account.** No tenant isolation.
 

@@ -19,6 +19,17 @@ from fb_cli.queries import DOC_IDS
 
 GRAPHQL_URL = "https://www.facebook.com/api/graphql/"
 
+# Substrings Facebook uses in error responses when the per-page CSRF tokens
+# (fb_dtsg / lsd) are stale but the long-lived cookies are still valid. When
+# we see one of these we can usually recover with a single cookie_refresh call.
+_STALE_TOKEN_HINTS = (
+    "fb_dtsg",
+    "Login required",
+    "You must be logged in",
+    "Sorry, something went wrong",
+    "www.facebook.com/checkpoint",
+)
+
 
 class FBError(RuntimeError):
     """Anything Facebook returned that wasn't usable data."""
@@ -88,16 +99,59 @@ def graphql(
     doc_id: str | None = None,
     referer: str = "https://www.facebook.com/marketplace/",
     timeout: int = 30,
+    auto_refresh: bool = True,
 ) -> dict[str, Any]:
     """POST /api/graphql/ and return parsed JSON.
 
     Facebook may return NDJSON for paginated queries — we parse the first JSON
     object only and treat the rest as deferred fragments (which we don't need
     for search/listing/suggest).
+
+    On stale-token errors we transparently call `cookie_refresh.refresh()` to
+    pull fresh fb_dtsg/lsd from a /marketplace/ HTML fetch, persist the
+    updated auth, and retry the request once. Disable with auto_refresh=False.
     """
     did = doc_id or DOC_IDS.get(friendly_name)
     if not did:
         raise FBError(f"Unknown friendly_name: {friendly_name}. Add it to queries.DOC_IDS.")
+
+    try:
+        return _graphql_once(auth, friendly_name, did, variables, referer=referer, timeout=timeout)
+    except (AuthExpiredError, FBError) as e:
+        if not auto_refresh or not _is_token_stale_error(e):
+            raise
+        # In-place refresh: fetch new fb_dtsg/lsd from the cookies we have.
+        from fb_cli import auth as auth_mod, cookie_refresh
+
+        try:
+            refreshed = cookie_refresh.refresh(auth)
+        except cookie_refresh.CookieRefreshError as refresh_err:
+            raise AuthExpiredError(
+                f"{e}\n  cookie refresh also failed: {refresh_err}\n"
+                "  next: run `fb-cli auth import-browser` (auto-launches Chrome)."
+            ) from e
+        auth.update(refreshed)
+        try:
+            auth_mod.save_auth(auth)
+        except OSError:
+            pass
+        return _graphql_once(auth, friendly_name, did, variables, referer=referer, timeout=timeout)
+
+
+def _is_token_stale_error(err: Exception) -> bool:
+    msg = str(err)
+    return isinstance(err, AuthExpiredError) or any(h in msg for h in _STALE_TOKEN_HINTS)
+
+
+def _graphql_once(
+    auth: dict[str, Any],
+    friendly_name: str,
+    did: str,
+    variables: dict[str, Any],
+    *,
+    referer: str,
+    timeout: int,
+) -> dict[str, Any]:
 
     body = urllib.parse.urlencode(_form_fields(auth, friendly_name, did, variables)).encode()
     cookie_header = "; ".join(f"{k}={v}" for k, v in auth["cookies"].items())
@@ -139,12 +193,22 @@ def graphql(
     if not text.strip():
         raise FBError("empty response (likely auth expired or doc_id stale)")
 
-    # Take first JSON object — FB streams may concat multiple
+    # Take first JSON object — FB streams may concat multiple. Some legacy-ish
+    # error responses are guarded with Facebook's anti-JSON-hijacking prefix.
     first = text.split("\n", 1)[0].strip()
+    if first.startswith("for (;;);"):
+        first = first.removeprefix("for (;;);")
     try:
         data = json.loads(first)
     except json.JSONDecodeError as e:
         raise FBError(f"non-JSON response: {first[:300]}") from e
+
+    if data.get("error"):
+        summary = data.get("errorSummary") or "Facebook rejected the request"
+        description = data.get("errorDescription") or ""
+        code = data.get("error")
+        hint = " Run `fb-cli auth refresh` (cheap), then `fb-cli auth import-browser` if that fails."
+        raise FBError(f"Facebook error {code}: {summary}. {description}{hint}".strip())
 
     if "errors" in data:
         msgs = [

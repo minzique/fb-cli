@@ -37,8 +37,11 @@ fb-cli watch check piano        # shows only NEW listings since last check
 fb-cli watch check               # all watches
 fb-cli watch rm piano
 
-# Auth check (re-import if anything starts failing with "Login required" or HTTP 500)
+# Auth check / refresh — see the AUTH RECOVERY tree below for failure handling
 fb-cli auth status
+fb-cli auth doctor          # diagnose + recommended action
+fb-cli auth refresh         # cheap: pulls fresh fb_dtsg/lsd via 1 HTTPS GET
+fb-cli auth import-browser  # fuller: auto-launches managed Chrome if needed
 ```
 
 ## Output
@@ -77,13 +80,60 @@ Kawai ES110) >> 61-key unweighted toy keyboards >> free acoustic uprights
 ## Auth & limits
 
 - Auth file: `~/.fb-cli/auth.json` (mode 600, contains real session cookies)
-- `fb_dtsg` rotates every few days. If you get `Login required` or HTTP 500
-  consistently, ask the user for a fresh HAR (Firefox/Chrome devtools →
-  Network → Save All as HAR → `fb-cli auth import-har <file>`)
 - This is the user's real Facebook account. **Don't message sellers**, don't
   attempt to create listings, don't do anything write-y. Read-only.
 - Rate limit yourself: pause a few seconds between bulk PDP fetches, don't
   iterate over hundreds of listings in one session.
+
+### How fb-cli auth actually works (so you can recover intelligently)
+
+FB's session has two layers:
+
+1. **Long-lived signed cookies** — `xs` (the actual session secret), `c_user`,
+   `datr`, `fr`, `sb`. Lifetime ~1 year when the user checked "Save login
+   info" on login. This IS Facebook's "remember me".
+2. **Page-bound CSRF tokens** — `fb_dtsg` and `lsd`, embedded in the HTML of
+   every page. Rotate every few hours. Can be re-derived from any successful
+   page load using the cookies above.
+
+fb-cli already auto-retries token refreshes inside `client.graphql`. Most
+token-staleness errors heal themselves on the next call. If you see an error
+bubble up, follow the recovery tree below — **do not abandon the tool on the
+first failure**.
+
+### AUTH RECOVERY tree (run in order, stop at first success)
+
+```
+ERROR: "Login required" / FBerror 1357004 / HTTP 500 / cookie refresh failed
+  │
+  └─ 1. fb-cli auth doctor              # tells you exactly which step is needed
+  │
+  └─ 2. fb-cli auth refresh             # cheap: HTTPS GET, no browser. Fixes ~95% of issues.
+  │     └─ retry your search/listing
+  │
+  └─ 3. fb-cli auth import-browser      # auto-launches managed Chrome on :9222
+  │     └─ retry
+  │
+  └─ 4. ASK THE USER — cookies are dead, they need to log in once:
+        "Run `fb-cli auth chrome login`, sign in to Facebook with
+        'Save login info' checked, then I'll retry. (One-time, lasts ~1 year.)"
+```
+
+Never silently move on to a different tool when fb-cli reports an auth error.
+The recovery is cheap (steps 1-3 are non-interactive). Only step 4 needs the
+user, and it's a true one-time-per-year action.
+
+### Managed Chrome (for `import-browser`)
+
+fb-cli owns a dedicated debug Chrome at `~/.fb-cli/chrome-profile/` separate
+from the user's normal Chrome.
+
+```bash
+fb-cli auth chrome status
+fb-cli auth chrome login         # one-time: opens FB login in the managed Chrome
+fb-cli auth chrome start         # boots the managed Chrome on :9222
+fb-cli auth chrome stop
+```
 
 ## Internals
 
