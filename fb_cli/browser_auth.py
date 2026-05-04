@@ -6,18 +6,12 @@ websocket-client or pychrome.
 """
 from __future__ import annotations
 
-import base64
 import json
-import os
-import select
-import socket
-import ssl
-import struct
 import time
 import urllib.parse
-import urllib.request
-from dataclasses import dataclass
 from typing import Any
+
+from fb_cli import cdp
 
 INTERESTING_COOKIES = ("c_user", "xs", "datr", "fr", "sb", "presence", "wd", "dpr")
 REQUIRED_COOKIES = ("c_user", "xs", "datr")
@@ -27,14 +21,6 @@ DEFAULT_MARKETPLACE_URL = "https://www.facebook.com/marketplace/search/?query={q
 
 class BrowserAuthError(RuntimeError):
     """Chrome/CDP auth import could not produce a usable auth file."""
-
-
-@dataclass(frozen=True)
-class Target:
-    id: str
-    url: str
-    title: str
-    websocket_url: str
 
 
 def import_from_browser(
@@ -73,21 +59,24 @@ def import_from_browser(
             time.sleep(1.5)
 
     target = _choose_target(_list_targets(debug_url))
-    with _CDPClient(target.websocket_url) as cdp:
-        cdp.call("Runtime.enable")
-        cdp.call("Network.enable", {"maxPostDataSize": 1024 * 1024})
-        cdp.call("Page.enable")
+    try:
+        with cdp.CDPClient(target.websocket_url) as cdp_client:
+            cdp_client.call("Runtime.enable")
+            cdp_client.call("Network.enable", {"maxPostDataSize": 1024 * 1024})
+            cdp_client.call("Page.enable")
 
-        page_data = _evaluate_page_data(cdp)
-        graphql_forms = _capture_graphql_forms(
-            cdp,
-            target_url=target.url,
-            search_query=search_query,
-            timeout=timeout,
-            navigate=navigate,
-        )
-        cookies = _facebook_cookies(cdp.call("Network.getAllCookies"))
-        form = _best_graphql_form(graphql_forms)
+            page_data = _evaluate_page_data(cdp_client)
+            graphql_forms = _capture_graphql_forms(
+                cdp_client,
+                target_url=target.url,
+                search_query=search_query,
+                timeout=timeout,
+                navigate=navigate,
+            )
+            cookies = _facebook_cookies(cdp_client.call("Network.getAllCookies"))
+            form = _best_graphql_form(graphql_forms)
+    except cdp.CDPError as e:
+        raise BrowserAuthError(str(e)) from e
 
     missing = [name for name in REQUIRED_COOKIES if not cookies.get(name)]
     if missing:
@@ -123,37 +112,19 @@ def import_from_browser(
     return auth
 
 
-def _list_targets(debug_url: str) -> list[Target]:
-    url = debug_url.rstrip("/") + "/json"
+def _list_targets(debug_url: str) -> list[cdp.Target]:
     try:
-        with urllib.request.urlopen(url, timeout=5) as resp:
-            raw = resp.read().decode("utf-8")
-    except OSError as e:
-        raise BrowserAuthError(
-            f"Could not connect to Chrome DevTools at {debug_url}. "
-            "Run `fb-cli auth chrome start` (or pass --launch)."
-        ) from e
-
-    data = json.loads(raw)
-    targets: list[Target] = []
-    for item in data:
-        ws = item.get("webSocketDebuggerUrl")
-        if item.get("type") == "page" and ws:
-            targets.append(
-                Target(
-                    id=str(item.get("id", "")),
-                    url=str(item.get("url", "")),
-                    title=str(item.get("title", "")),
-                    websocket_url=str(ws),
-                )
-            )
-    if not targets:
-        raise BrowserAuthError("Chrome DevTools has no page targets. Open Facebook Marketplace and retry.")
-    return targets
+        return cdp.list_targets(debug_url)
+    except cdp.CDPError as e:
+        msg = str(e).replace(
+            "Run `fb-cli auth chrome start`.",
+            "Run `fb-cli auth chrome start` (or pass --launch).",
+        )
+        raise BrowserAuthError(msg) from e
 
 
-def _choose_target(targets: list[Target]) -> Target:
-    def score(t: Target) -> tuple[int, int]:
+def _choose_target(targets: list[cdp.Target]) -> cdp.Target:
+    def score(t: cdp.Target) -> tuple[int, int]:
         url = t.url.lower()
         return (
             2 if "facebook.com/marketplace" in url else 1 if "facebook.com" in url else 0,
@@ -169,7 +140,7 @@ def _choose_target(targets: list[Target]) -> Target:
     return target
 
 
-def _evaluate_page_data(cdp: "_CDPClient") -> dict[str, str]:
+def _evaluate_page_data(cdp_client: cdp.CDPClient) -> dict[str, str]:
     expression = r"""
 (() => {
   const out = {user_agent: navigator.userAgent};
@@ -194,18 +165,18 @@ def _evaluate_page_data(cdp: "_CDPClient") -> dict[str, str]:
 })()
 """
     try:
-        resp = cdp.call(
+        resp = cdp_client.call(
             "Runtime.evaluate",
             {"expression": expression, "returnByValue": True, "awaitPromise": True},
         )
-    except BrowserAuthError:
+    except cdp.CDPError:
         return {}
     value = ((resp.get("result") or {}).get("result") or {}).get("value")
     return {str(k): str(v) for k, v in value.items()} if isinstance(value, dict) else {}
 
 
 def _capture_graphql_forms(
-    cdp: "_CDPClient",
+    cdp_client: cdp.CDPClient,
     *,
     target_url: str,
     search_query: str,
@@ -214,15 +185,15 @@ def _capture_graphql_forms(
 ) -> list[dict[str, str]]:
     if navigate:
         if "facebook.com/marketplace" in target_url.lower():
-            cdp.call("Page.reload", {"ignoreCache": True})
+            cdp_client.call("Page.reload", {"ignoreCache": True})
         else:
             url = DEFAULT_MARKETPLACE_URL.format(query=urllib.parse.quote(search_query))
-            cdp.call("Page.navigate", {"url": url})
+            cdp_client.call("Page.navigate", {"url": url})
 
     forms: list[dict[str, str]] = []
     deadline = time.monotonic() + max(1, timeout)
     while time.monotonic() < deadline:
-        msg = cdp.recv_json(timeout=max(0.1, min(1.0, deadline - time.monotonic())))
+        msg = cdp_client.recv_json(timeout=max(0.1, min(1.0, deadline - time.monotonic())))
         if not msg or msg.get("method") != "Network.requestWillBeSent":
             continue
         request = ((msg.get("params") or {}).get("request") or {})
@@ -303,141 +274,3 @@ def _jazoest(token: str) -> str:
     return "2" + str(sum(ord(ch) for ch in token))
 
 
-class _CDPClient:
-    def __init__(self, websocket_url: str) -> None:
-        self.websocket_url = websocket_url
-        self._sock = self._connect(websocket_url)
-        self._next_id = 0
-
-    def __enter__(self) -> "_CDPClient":
-        return self
-
-    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
-        self.close()
-
-    def close(self) -> None:
-        try:
-            self._send_frame(b"", opcode=0x8)
-        except OSError:
-            pass
-        try:
-            self._sock.close()
-        except OSError:
-            pass
-
-    def call(self, method: str, params: dict[str, Any] | None = None, *, timeout: float = 5) -> dict[str, Any]:
-        self._next_id += 1
-        msg_id = self._next_id
-        payload: dict[str, Any] = {"id": msg_id, "method": method}
-        if params is not None:
-            payload["params"] = params
-        self._send_json(payload)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            msg = self.recv_json(timeout=max(0.1, min(1.0, deadline - time.monotonic())))
-            if not msg:
-                continue
-            if msg.get("id") != msg_id:
-                continue
-            if "error" in msg:
-                raise BrowserAuthError(f"CDP {method} failed: {msg['error']}")
-            return msg
-        raise BrowserAuthError(f"Timed out waiting for CDP {method}")
-
-    def recv_json(self, *, timeout: float) -> dict[str, Any] | None:
-        ready, _, _ = select.select([self._sock], [], [], timeout)
-        if not ready:
-            return None
-        data = self._recv_message()
-        if data is None:
-            return None
-        return json.loads(data.decode("utf-8"))
-
-    def _send_json(self, payload: dict[str, Any]) -> None:
-        self._send_frame(json.dumps(payload, separators=(",", ":")).encode("utf-8"), opcode=0x1)
-
-    @staticmethod
-    def _connect(websocket_url: str) -> socket.socket:
-        parsed = urllib.parse.urlparse(websocket_url)
-        if parsed.scheme not in ("ws", "wss"):
-            raise BrowserAuthError(f"Unsupported websocket URL: {websocket_url}")
-        host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
-        raw_sock = socket.create_connection((host, port), timeout=5)
-        sock = ssl.create_default_context().wrap_socket(raw_sock, server_hostname=host) if parsed.scheme == "wss" else raw_sock
-        key = base64.b64encode(os.urandom(16)).decode("ascii")
-        path = parsed.path or "/"
-        if parsed.query:
-            path += "?" + parsed.query
-        request = (
-            f"GET {path} HTTP/1.1\r\n"
-            f"Host: {host}:{port}\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            f"Sec-WebSocket-Key: {key}\r\n"
-            "Sec-WebSocket-Version: 13\r\n\r\n"
-        )
-        sock.sendall(request.encode("ascii"))
-        response = b""
-        while b"\r\n\r\n" not in response:
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            response += chunk
-        if b" 101 " not in response.split(b"\r\n", 1)[0]:
-            raise BrowserAuthError(f"Chrome rejected websocket handshake: {response[:200]!r}")
-        return sock
-
-    def _send_frame(self, payload: bytes, *, opcode: int) -> None:
-        # Client websocket frames must be masked.
-        first = 0x80 | opcode
-        length = len(payload)
-        if length < 126:
-            header = struct.pack("!BB", first, 0x80 | length)
-        elif length < 65536:
-            header = struct.pack("!BBH", first, 0x80 | 126, length)
-        else:
-            header = struct.pack("!BBQ", first, 0x80 | 127, length)
-        mask = os.urandom(4)
-        masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
-        self._sock.sendall(header + mask + masked)
-
-    def _recv_message(self) -> bytes | None:
-        chunks: list[bytes] = []
-        while True:
-            fin, opcode, payload = self._recv_frame()
-            if opcode == 0x8:  # close
-                return None
-            if opcode == 0x9:  # ping
-                self._send_frame(payload, opcode=0xA)
-                continue
-            if opcode in (0x1, 0x2, 0x0):
-                chunks.append(payload)
-                if fin:
-                    return b"".join(chunks)
-
-    def _recv_frame(self) -> tuple[bool, int, bytes]:
-        header = self._recv_exact(2)
-        first, second = header[0], header[1]
-        fin = bool(first & 0x80)
-        opcode = first & 0x0F
-        masked = bool(second & 0x80)
-        length = second & 0x7F
-        if length == 126:
-            length = struct.unpack("!H", self._recv_exact(2))[0]
-        elif length == 127:
-            length = struct.unpack("!Q", self._recv_exact(8))[0]
-        mask = self._recv_exact(4) if masked else b""
-        payload = self._recv_exact(length) if length else b""
-        if masked:
-            payload = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
-        return fin, opcode, payload
-
-    def _recv_exact(self, size: int) -> bytes:
-        data = b""
-        while len(data) < size:
-            chunk = self._sock.recv(size - len(data))
-            if not chunk:
-                raise BrowserAuthError("Chrome DevTools websocket closed unexpectedly")
-            data += chunk
-        return data
