@@ -14,6 +14,7 @@ from fb_cli import (
     chrome_launcher,
     client,
     cookie_refresh,
+    marketplace_browser,
     parser as parse_mod,
     queries,
     watch,
@@ -97,6 +98,58 @@ def _build_parser() -> argparse.ArgumentParser:
         help="open Facebook login page in the managed Chrome (one-time setup)",
     )
     pa_chrome_login.add_argument("--port", type=int, default=chrome_launcher.DEFAULT_PORT)
+
+    # browser-backed Marketplace UI
+    pb = sub.add_parser(
+        "browser",
+        help="drive the managed Chrome for browser-backed Marketplace fallback",
+    )
+    pb_sub = pb.add_subparsers(dest="browser_cmd", required=True)
+
+    pb_status = pb_sub.add_parser("status", help="show managed Chrome + open tab status")
+    pb_status.add_argument("--debug-url", default=chrome_launcher.DEFAULT_DEBUG_URL)
+
+    pb_open = pb_sub.add_parser("open", help="open a URL in the managed Chrome")
+    pb_open.add_argument("url")
+    pb_open.add_argument("--debug-url", default=chrome_launcher.DEFAULT_DEBUG_URL)
+    pb_open.add_argument("--no-launch", action="store_true")
+    pb_open.add_argument("--wait", type=float, default=marketplace_browser.DEFAULT_WAIT_SECONDS)
+
+    pb_search = pb_sub.add_parser("search", help="search Marketplace through the browser UI")
+    pb_search.add_argument("query")
+    pb_search.add_argument("--debug-url", default=chrome_launcher.DEFAULT_DEBUG_URL)
+    pb_search.add_argument("--no-launch", action="store_true")
+    pb_search.add_argument("--wait", type=float, default=marketplace_browser.DEFAULT_WAIT_SECONDS)
+    pb_search.add_argument("--min", dest="min_price", type=float)
+    pb_search.add_argument("--max", dest="max_price", type=float)
+    pb_search.add_argument("--radius", type=int)
+    pb_search.add_argument("--days", type=int)
+    pb_search.add_argument("--sort", help="pass-through web UI sortBy value")
+    pb_search.add_argument("--limit", type=int, default=24)
+    pb_search.add_argument("--format", choices=["table", "json", "jsonl"], default="table")
+
+    pb_extract = pb_sub.add_parser("extract", help="extract visible Marketplace listing cards")
+    pb_extract.add_argument("--debug-url", default=chrome_launcher.DEFAULT_DEBUG_URL)
+    pb_extract.add_argument("--no-launch", action="store_true")
+    pb_extract.add_argument("--limit", type=int, default=48)
+    pb_extract.add_argument("--format", choices=["table", "json", "jsonl"], default="table")
+
+    pb_scroll = pb_sub.add_parser("scroll", help="scroll the current browser page")
+    pb_scroll.add_argument("--debug-url", default=chrome_launcher.DEFAULT_DEBUG_URL)
+    pb_scroll.add_argument("--no-launch", action="store_true")
+    pb_scroll.add_argument("--steps", type=int, default=1)
+    pb_scroll.add_argument("--delay", type=float, default=1.0)
+
+    pb_shot = pb_sub.add_parser("screenshot", help="write a PNG screenshot of the current tab")
+    pb_shot.add_argument("path", nargs="?", default="~/.fb-cli/screenshot.png")
+    pb_shot.add_argument("--debug-url", default=chrome_launcher.DEFAULT_DEBUG_URL)
+    pb_shot.add_argument("--no-launch", action="store_true")
+
+    pb_eval = pb_sub.add_parser("eval", help="run JavaScript in the current tab; diagnostics only")
+    pb_eval.add_argument("expression")
+    pb_eval.add_argument("--debug-url", default=chrome_launcher.DEFAULT_DEBUG_URL)
+    pb_eval.add_argument("--no-launch", action="store_true")
+    pb_eval.add_argument("--unsafe", action="store_true", help="required because this can mutate the live Facebook page")
 
     # search
     ps = sub.add_parser("search", help="search marketplace")
@@ -355,6 +408,87 @@ def cmd_auth_show(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_browser_status(args: argparse.Namespace) -> int:
+    print(json.dumps(marketplace_browser.browser_status(args.debug_url), indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_browser_open(args: argparse.Namespace) -> int:
+    info = marketplace_browser.open_url(
+        args.url,
+        debug_url=args.debug_url,
+        launch=not args.no_launch,
+        wait_seconds=args.wait,
+    )
+    print(json.dumps(info, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_browser_search(args: argparse.Namespace) -> int:
+    listings = marketplace_browser.search(
+        args.query,
+        debug_url=args.debug_url,
+        launch=not args.no_launch,
+        wait_seconds=args.wait,
+        limit=args.limit,
+        min_price=args.min_price,
+        max_price=args.max_price,
+        radius=args.radius,
+        days=args.days,
+        sort=args.sort,
+    )
+    from fb_cli.format import format_search
+
+    print(format_search(listings, fmt=args.format))
+    return 0
+
+
+def cmd_browser_extract(args: argparse.Namespace) -> int:
+    listings = marketplace_browser.extract(
+        debug_url=args.debug_url,
+        launch=not args.no_launch,
+        limit=args.limit,
+    )
+    from fb_cli.format import format_search
+
+    print(format_search(listings, fmt=args.format))
+    return 0
+
+
+def cmd_browser_scroll(args: argparse.Namespace) -> int:
+    info = marketplace_browser.scroll(
+        debug_url=args.debug_url,
+        launch=not args.no_launch,
+        steps=args.steps,
+        delay=args.delay,
+    )
+    print(json.dumps(info, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_browser_screenshot(args: argparse.Namespace) -> int:
+    path = marketplace_browser.screenshot(
+        args.path,
+        debug_url=args.debug_url,
+        launch=not args.no_launch,
+    )
+    print(str(path))
+    return 0
+
+
+def cmd_browser_eval(args: argparse.Namespace) -> int:
+    if not args.unsafe:
+        print("refusing to run JavaScript without --unsafe", file=sys.stderr)
+        return 2
+    value = marketplace_browser.unsafe_eval(
+        args.expression,
+        debug_url=args.debug_url,
+        launch=not args.no_launch,
+    )
+    print(json.dumps(value, indent=2, ensure_ascii=False))
+    return 0
+
+
 def _do_search(
     auth: dict[str, Any],
     query: str,
@@ -598,6 +732,13 @@ HANDLERS = {
     ("auth", "show"): cmd_auth_show,
     ("auth", "doctor"): cmd_auth_doctor,
     ("auth", "chrome"): None,  # dispatched via chrome_cmd below
+    ("browser", "status"): cmd_browser_status,
+    ("browser", "open"): cmd_browser_open,
+    ("browser", "search"): cmd_browser_search,
+    ("browser", "extract"): cmd_browser_extract,
+    ("browser", "scroll"): cmd_browser_scroll,
+    ("browser", "screenshot"): cmd_browser_screenshot,
+    ("browser", "eval"): cmd_browser_eval,
     ("search", None): cmd_search,
     ("listing", None): cmd_listing,
     ("suggest", None): cmd_suggest,
@@ -618,7 +759,7 @@ CHROME_HANDLERS = {
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    sub = getattr(args, "auth_cmd", None) or getattr(args, "watch_cmd", None)
+    sub = getattr(args, "auth_cmd", None) or getattr(args, "watch_cmd", None) or getattr(args, "browser_cmd", None)
     if args.cmd == "auth" and sub == "chrome":
         chrome_cmd = getattr(args, "chrome_cmd", None)
         handler = CHROME_HANDLERS.get(chrome_cmd or "")
@@ -644,6 +785,10 @@ def main(argv: list[str] | None = None) -> int:
         return 4
     except browser_auth.BrowserAuthError as e:
         print(f"browser auth error: {e}", file=sys.stderr)
+        return 6
+    except marketplace_browser.BrowserError as e:
+        print(f"browser error: {e}", file=sys.stderr)
+        print("next: `fb-cli auth doctor`, then `fb-cli auth import-browser` if login/cookies are stale", file=sys.stderr)
         return 6
     except FileNotFoundError as e:
         print(str(e), file=sys.stderr)
