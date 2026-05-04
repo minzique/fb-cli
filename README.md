@@ -24,12 +24,36 @@ fields. This wraps that traffic in a clean CLI you can script against.
 
 ## Install
 
+Recommended for normal users: install it as an isolated CLI app.
+
 ```bash
-git clone https://github.com/<you>/fb-cli ~/Developer/fb-cli
-ln -s ~/Developer/fb-cli/bin/fb-cli ~/.local/bin/fb-cli
+# Once the package is on PyPI:
+pipx install fb-marketplace-cli
+# or, if you use uv:
+uv tool install fb-marketplace-cli
 ```
 
-That's it. Requires Python ≥3.10.
+That installs the command as `fb-cli`.
+
+Until the PyPI publish is complete, install directly from GitHub:
+
+```bash
+uv tool install git+https://github.com/minzique/fb-cli
+# or, with pipx:
+pipx install git+https://github.com/minzique/fb-cli
+```
+
+Requires Python ≥3.10. `pipx`/`uv tool` are preferred over plain `pip install`
+because they create a dedicated virtualenv for the CLI and put `fb-cli` on your
+PATH without touching your system Python.
+
+Developer install:
+
+```bash
+git clone https://github.com/minzique/fb-cli ~/Developer/fb-cli
+cd ~/Developer/fb-cli
+uv tool install --editable .
+```
 
 ## Auth (one-time, then automatic for ~1 year)
 

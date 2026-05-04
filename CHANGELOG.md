@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.1
+
+Packaging-only release for user-friendly installation.
+
+- Renamed the PyPI distribution to `fb-marketplace-cli` because `fb-cli` is
+  already taken on PyPI.
+- Kept the installed console command as `fb-cli`.
+- Documented the recommended install paths:
+  - `pipx install fb-marketplace-cli`
+  - `uv tool install fb-marketplace-cli`
+  - `uv tool install git+https://github.com/minzique/fb-cli` until PyPI publish lands.
+
 ## 0.2.0
 
 Self-managed auth that stays alive without you babysitting it.
